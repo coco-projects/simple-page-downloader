@@ -3,10 +3,9 @@
 	"description"          : "page downloader",
 	"type"                 : "library",
 	"license"              : "MIT",
-	"minimum-stability"    : "dev",
 	"require"              : {
 		"php": ">=8.0",
-		"coco-project/magic-access": "dev-main",
+		"coco-project/magic-access": "^1.0",
 		"guzzlehttp/guzzle": "^7.0"
 	},
 	"autoload"             : {
