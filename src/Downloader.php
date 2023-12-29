@@ -113,6 +113,7 @@ class Downloader
             call_user_func_array($this->successCallback, [
                 $contents,
                 $this,
+                304
             ]);
 
             return;
@@ -131,6 +132,7 @@ class Downloader
             call_user_func_array($this->successCallback, [
                 $contents,
                 $this,
+                $result->getStatusCode(),
             ]);
         }, function (RequestException $e) {
             call_user_func_array($this->errorCallback, [
