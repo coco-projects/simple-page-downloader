@@ -6,6 +6,7 @@
 
     use Coco\magicAccess\MagicMethod;
     use GuzzleHttp\Client;
+    use GuzzleHttp\Exception\ClientException;
     use GuzzleHttp\Exception\RequestException;
     use Psr\Http\Message\ResponseInterface;
 
@@ -13,14 +14,15 @@ class Downloader
 {
     use MagicMethod;
 
-    public ?Client $client          = null;
-    public string  $url             = '';
-    public array   $settings        = [];
-    public $successCallback = null;
-    public $errorCallback   = null;
-    public bool    $enableCache     = false;
-    public string  $cachePath       = './downloadCache/';
-    public string  $method          = 'get';
+    public ?Client $client              = null;
+    public string  $url                 = '';
+    public array   $settings            = [];
+    public $successCallback     = null;
+    public $errorCallback       = null;
+    public $clientErrorCallback = null;
+    public bool    $enableCache         = false;
+    public string  $cachePath           = './downloadCache/';
+    public string  $method              = 'get';
 
     public static function ins(): static
     {
@@ -35,6 +37,7 @@ class Downloader
     public function setMethod(string $method): static
     {
         $this->method = $method;
+
         return $this;
     }
 
@@ -45,9 +48,17 @@ class Downloader
         return $this;
     }
 
+    public function setClientErrorCallback($clientErrorCallback): static
+    {
+        $this->clientErrorCallback = $clientErrorCallback;
+
+        return $this;
+    }
+
     public static function gbkToUtf8($contents): string
     {
-        return iconv("GBK", "UTF-8", $contents);
+//        return iconv("GBK", "UTF-8", $contents);
+        return mb_convert_encoding($contents, 'UTF-8', 'GBK');
     }
 
     public function setErrorCallback($errorCallback): static
@@ -108,6 +119,7 @@ class Downloader
         }
 
         $promise = $this->client->getAsync($this->url, $this->settings);
+
         $promise->then(function (ResponseInterface $result) use ($filePath) {
             $contents = (string)$result->getBody();
 
@@ -127,6 +139,13 @@ class Downloader
             ]);
         });
 
-        $promise->wait();
+        try {
+            $promise->wait();
+        } catch (\Exception $e) {
+            call_user_func_array($this->clientErrorCallback, [
+                $e,
+                $this,
+            ]);
+        }
     }
 }
