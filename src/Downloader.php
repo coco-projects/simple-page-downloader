@@ -103,7 +103,9 @@ class Downloader
 
     public function sendRequest(): void
     {
-        $fileName = md5($this->url) . '.txt';
+        $hash = md5($this->url);
+        $fileName = substr($hash, 0, 2) . '/' . substr($hash, 2, 2) . '/' . $hash . '.txt';
+
         is_dir($this->cachePath) or mkdir($this->cachePath, 777, true);
         $filePath = rtrim($this->cachePath, '\/\\') . '/' . $fileName;
 
