@@ -176,4 +176,32 @@ class Utils
 
         return $str;
     }
+
+    public static function parseCookie($cookieString): array
+    {
+        $cookieString = rtrim($cookieString, '; ');
+
+        // 将cookie字符串解析为关联数组
+        $cookiesArray = [];
+        parse_str(str_replace('; ', '&', $cookieString), $cookiesArray);
+
+        return $cookiesArray;
+    }
+
+    public static function parseHeaders($headerStr): array
+    {
+        preg_match_all('/^\s*([^:]+):([^\r\n]+)/im', $headerStr, $headerLines, PREG_SET_ORDER);
+        $parsedHeaders = [];
+        foreach ($headerLines as $k => $v) {
+            $parsedHeaders[trim($v[1])] = $v[2];
+        }
+
+        return $parsedHeaders;
+    }
+
+    public static function gbkToUtf8($contents): string
+    {
+//        return iconv("GBK", "UTF-8", $contents);
+        return mb_convert_encoding($contents, 'UTF-8', 'GBK');
+    }
 }
