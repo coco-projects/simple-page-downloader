@@ -8,6 +8,7 @@
     use GuzzleHttp\Client;
     use GuzzleHttp\Exception\ClientException;
     use GuzzleHttp\Exception\RequestException;
+    use GuzzleHttp\Psr7\Response;
     use Psr\Http\Message\ResponseInterface;
 
 class Downloader
@@ -58,6 +59,7 @@ class Downloader
     public function setRawHeader(string $rawHeader): static
     {
         $headers = Utils::parseHeaders($rawHeader);
+        unset($headers['host']);
 
         $this->rawHeader = $headers;
 
@@ -131,10 +133,12 @@ class Downloader
 
             $contents = file_get_contents($filePath);
 
+            $response = new Response(304, [], $contents);
+
             call_user_func_array($this->successCallback, [
                 $contents,
                 $this,
-                304,
+                $response,
             ]);
 
             return;
@@ -146,8 +150,8 @@ class Downloader
 
         $promise = $this->client->requestAsync($this->method, $this->url, $this->settings);
 
-        $promise->then(function (ResponseInterface $result) use ($filePath) {
-            $contents = (string)$result->getBody();
+        $promise->then(function (ResponseInterface $response) use ($filePath) {
+            $contents = (string)$response->getBody();
 
             if ($this->enableCache) {
                 file_put_contents($filePath, $contents);
@@ -157,7 +161,7 @@ class Downloader
                 call_user_func_array($this->successCallback, [
                     $contents,
                     $this,
-                    $result->getStatusCode(),
+                    $response,
                 ]);
             }
         }, function (RequestException $e) {

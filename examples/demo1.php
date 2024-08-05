@@ -72,24 +72,25 @@ AAA;
         print_r($postPrams);;;
         echo PHP_EOL;
 
-        $ins->setUrl($url)->setSuccessCallback(function(string $contents, Downloader $_this) use ($i) {
+        $ins->setUrl($url)
+            ->setSuccessCallback(function(string $contents, Downloader $_this, ResponseInterface $response) use ($i) {
 //            $contents = $_ins1::gbkToUtf8($contents);
 
-            $json = json_decode($contents, true);
+                $json = json_decode($contents, true);
 
-            echo '列表结果：- ' . count($json['data']);
-            echo PHP_EOL;
+                echo '列表结果：- ' . count($json['data']);
+                echo PHP_EOL;
 
-            $_ins1 = Downloader::ins();
+                $_ins1 = Downloader::ins();
 
-            $_ins1->setEnableCache(true);
-            $_ins1->setMethod('get');
+                $_ins1->setEnableCache(true);
+                $_ins1->setMethod('get');
 
-            $_ins1->setSettings([
-                'verify' => false,
-            ]);
+                $_ins1->setSettings([
+                    'verify' => false,
+                ]);
 
-            $_ins1->setRawHeader(<<<BBB
+                $_ins1->setRawHeader(<<<BBB
 Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
 Accept-Encoding: gzip, deflate, br, zstd
 Accept-Language: zh-CN,zh;q=0.9
@@ -111,70 +112,70 @@ sec-ch-ua-platform: "Windows"
 
 
 BBB
-            );
+                );
 
-            foreach ($json['data'] as $k1 => $v1)
-            {
-                $url = $v1['docpuburl'];
-
-                $_ins1->setUrl($url)->setSuccessCallback(function(string $contents, Downloader $_ins1) use($i){
-
-                    echo '采集详细：' . $_ins1->url;
-                    echo PHP_EOL;
-
-                    preg_match_all('%<td width="184"[^<>]+>\s+(\S+)\s+</td>\s+<td align="left"[^<>]+>\s+(\S*)\s+</td>%im', $contents, $result, PREG_SET_ORDER);
-
-                    $data = [
-                        $result[0][2],
-                        $result[1][2],
-                        $result[2][2],
-                        $result[3][2],
-                        $result[4][2],
-                        $result[5][2],
-                        $result[6][2],
-                        $_ins1->url,
-                        strtr($result[7][2], ["," => "，",]),
-                    ];
-
-                    echo '详细结果：' . PHP_EOL;
-                    print_r($data);
-
-                    file_put_contents('result'.$i.'.csv', implode(',', $data) . PHP_EOL, 8);
-                    echo PHP_EOL;
-
-                })->setErrorCallback(function(RequestException $e, Downloader $_ins1) {
-                    echo PHP_EOL;
-                    echo PHP_EOL;
-
-                    echo $e->getMessage();
-
-                    file_put_contents('getMessage.txt', $e->getMessage());
-
-                    echo PHP_EOL;
-                    echo PHP_EOL;
-
-                })->sendRequest();
-
-                if (!$_ins1->getIsByCache())
+                foreach ($json['data'] as $k1 => $v1)
                 {
-                    echo $i . ' - ' . $k1 . '等1秒...';
-                    echo PHP_EOL;
-                    echo PHP_EOL;
-                    sleep(1);
-                }
-                else
-                {
-                    echo $i . ' - ' . $k1 . 'by cache...';
-                    echo PHP_EOL;
-                    echo PHP_EOL;
-                }
-            }
+                    $url = $v1['docpuburl'];
 
-        })->setErrorCallback(function(RequestException $e, Downloader $_ins1) {
+                    $_ins1->setUrl($url)->setSuccessCallback(function(string $contents, Downloader $_ins1,ResponseInterface $response) use ($i) {
+
+                        echo '采集详细：' . $_ins1->url;
+                        echo PHP_EOL;
+
+                        preg_match_all('%<td width="184"[^<>]+>\s+(\S+)\s+</td>\s+<td align="left"[^<>]+>\s+(\S*)\s+</td>%im', $contents, $result, PREG_SET_ORDER);
+
+                        $data = [
+                            $result[0][2],
+                            $result[1][2],
+                            $result[2][2],
+                            $result[3][2],
+                            $result[4][2],
+                            $result[5][2],
+                            $result[6][2],
+                            $_ins1->url,
+                            strtr($result[7][2], ["," => "，",]),
+                        ];
+
+                        echo '详细结果：' . PHP_EOL;
+                        print_r($data);
+
+                        file_put_contents('result' . $i . '.csv', implode(',', $data) . PHP_EOL, 8);
+                        echo PHP_EOL;
+
+                    })->setErrorCallback(function(RequestException $e, Downloader $_ins1) {
+                        echo PHP_EOL;
+                        echo PHP_EOL;
+
+                        echo $e->getMessage();
+
+                        file_put_contents('getMessage.txt', $e->getMessage());
+
+                        echo PHP_EOL;
+                        echo PHP_EOL;
+
+                    })->sendRequest();
+
+                    if (!$_ins1->getIsByCache())
+                    {
+                        echo $i . ' - ' . $k1 . '等1秒...';
+                        echo PHP_EOL;
+                        echo PHP_EOL;
+                        sleep(1);
+                    }
+                    else
+                    {
+                        echo $i . ' - ' . $k1 . 'by cache...';
+                        echo PHP_EOL;
+                        echo PHP_EOL;
+                    }
+                }
+
+            })->setErrorCallback(function(RequestException $e, Downloader $_ins1) {
             echo PHP_EOL;
             echo PHP_EOL;
 
-//            echo $e->getMessage();
+            echo $e->getMessage();
             echo PHP_EOL;
             echo PHP_EOL;
 
