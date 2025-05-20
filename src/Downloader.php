@@ -4,184 +4,537 @@
 
     namespace Coco\simplePageDownloader;
 
+    use Coco\logger\Logger;
     use Coco\magicAccess\MagicMethod;
     use GuzzleHttp\Client;
-    use GuzzleHttp\Exception\ClientException;
     use GuzzleHttp\Exception\RequestException;
+    use GuzzleHttp\HandlerStack;
+    use GuzzleHttp\Middleware;
     use GuzzleHttp\Psr7\Response;
+    use Psr\Http\Message\RequestInterface;
     use Psr\Http\Message\ResponseInterface;
 
-class Downloader
-{
-    use MagicMethod;
+    use GuzzleHttp\Pool;
+    use GuzzleHttp\Psr7\Request;
 
-    public static array $clientConfig = [];
-
-    public ?Client $client              = null;
-    public string  $url                 = '';
-    public array   $settings            = [];
-    public array   $rawHeader           = [];
-    public $successCallback     = null;
-    public $errorCallback       = null;
-    public $clientErrorCallback = null;
-    public bool    $enableCache         = false;
-    public string  $cachePath           = './downloadCache/';
-    public string  $method              = 'get';
-    public bool    $isByCache           = false;
-
-    public static function ins(): static
+    class Downloader
     {
-        return new static();
-    }
+        use MagicMethod;
+        use Logger;
 
-    public static function init(array $clientConfig): void
-    {
-        static::$clientConfig = $clientConfig;
-    }
+        public static array $clientConfig = [];
 
-    public function __construct()
-    {
-        $this->client = new Client(static::$clientConfig);
-    }
+        public ?Client $client              = null;
+        public int     $concurrency         = 5;
+        public string  $url                 = '';
+        public array   $urls                = [];
+        public array   $settings            = [];
+        public array   $rawHeader           = [];
+        public array   $cacheCallback       = [];
+        public bool    $enableCache         = false;
+        public string  $cachePath           = './downloadCache/';
+        public string  $method              = 'get';
+        public bool    $isByCache           = false;
+        public         $successCallback     = null;
+        public         $errorCallback       = null;
+        public         $clientErrorCallback = null;
+        public int     $retryTimes          = 5;
 
-    public function getIsByCache(): bool
-    {
-        return $this->isByCache;
-    }
 
-    public function setMethod(string $method): static
-    {
-        $this->method = $method;
+        protected static string $redisHost     = '127.0.0.1';
+        protected static string $redisPassword = '';
+        protected static int    $redisPort     = 6379;
+        protected static int    $redisDb       = 14;
 
-        return $this;
-    }
+        protected static string $logNamespace   = 'download-log';
+        protected static bool   $enableEchoLog  = false;
+        protected static bool   $enableRedisLog = false;
 
-    public function setRawHeader(string $rawHeader): static
-    {
-        $headers = Utils::parseHeaders($rawHeader);
-        unset($headers['host']);
-
-        $this->rawHeader = $headers;
-
-        return $this;
-    }
-
-    public function setSuccessCallback($successCallback): static
-    {
-        $this->successCallback = $successCallback;
-
-        return $this;
-    }
-
-    public function setClientErrorCallback($clientErrorCallback): static
-    {
-        $this->clientErrorCallback = $clientErrorCallback;
-
-        return $this;
-    }
-
-    public function setErrorCallback($errorCallback): static
-    {
-        $this->errorCallback = $errorCallback;
-
-        return $this;
-    }
-
-    public function setClient($client): static
-    {
-        $this->client = $client;
-
-        return $this;
-    }
-
-    public function setEnableCache(bool $enableCache): static
-    {
-        $this->enableCache = $enableCache;
-
-        return $this;
-    }
-
-    public function getClient(): Client
-    {
-        return $this->client;
-    }
-
-    public function setUrl(string $url): static
-    {
-        $this->url = $url;
-
-        return $this;
-    }
-
-    public function setSettings(array $settings): static
-    {
-        $this->settings = $settings;
-
-        return $this;
-    }
-
-    public function sendRequest(): void
-    {
-        $hash     = md5($this->url);
-        $fileName = substr($hash, 0, 2) . '/' . substr($hash, 2, 2) . '/' . $hash . '.txt';
-
-        $filePath = rtrim($this->cachePath, '\/\\') . '/' . $fileName;
-        is_dir(dirname($filePath)) or mkdir(dirname($filePath), 777, true);
-
-        if ($this->enableCache && is_file($filePath)) {
-            $this->isByCache = true;
-
-            $contents = file_get_contents($filePath);
-
-            $response = new Response(304, [], $contents);
-
-            call_user_func_array($this->successCallback, [
-                $contents,
-                $this,
-                $response,
-            ]);
-
-            return;
+        public static function initClientConfig(array $clientConfig): void
+        {
+            static::$clientConfig = $clientConfig;
         }
 
-        if (count($this->rawHeader)) {
-            $this->settings[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
+        public static function initLogger(string $logNamespace, bool $enableEchoLog = false, bool $enableRedisLog = false): void
+        {
+            static::$logNamespace   = $logNamespace;
+            static::$enableEchoLog  = $enableEchoLog;
+            static::$enableRedisLog = $enableRedisLog;
         }
 
-        $promise = $this->client->requestAsync($this->method, $this->url, $this->settings);
+        public static function setRedis(string $redisHost = '127.0.0.1', int $redisPort = 6379, string $password = '', int $db = 10): void
+        {
+            static::$redisHost     = $redisHost;
+            static::$redisPort     = $redisPort;
+            static::$redisPassword = $password;
+            static::$redisDb       = $db;
+        }
 
-        $promise->then(function (ResponseInterface $response) use ($filePath) {
-            $contents = (string)$response->getBody();
+        public static function ins(): static
+        {
+            return new static();
+        }
 
-            if ($this->enableCache) {
-                file_put_contents($filePath, $contents);
+        protected function __construct()
+        {
+            $this->client = new Client(static::$clientConfig);
+
+            $this->setStandardLogger(static::$logNamespace);
+
+            if (static::$enableRedisLog)
+            {
+                $this->addRedisHandler(redisHost: static::$redisHost, redisPort: static::$redisPort, password: static::$redisPassword, db: static::$redisDb, logName: static::$logNamespace, callback: static::getStandardFormatter());
             }
 
-            if (is_callable($this->successCallback)) {
+            if (static::$enableEchoLog)
+            {
+                $this->addStdoutHandler(static::getStandardFormatter());
+            }
+        }
+
+        public function baseCacheStrategy(): static
+        {
+            $this->addCacheCallback(function(string $contents, Downloader $_this, ResponseInterface $response) {
+
+                $statusCode = $response->getStatusCode();
+                $method     = $_this->getMethod();
+
+                return (strtolower($method) == 'get') && in_array($statusCode, [
+                        200,
+                        404,
+                    ]);
+            });
+
+            return $this;
+        }
+
+        public function setRetryTimes(int $retryTimes): static
+        {
+            $this->retryTimes = $retryTimes;
+
+            return $this;
+        }
+
+        public function setConcurrency(int $concurrency): static
+        {
+            $this->concurrency = $concurrency;
+
+            return $this;
+        }
+
+        public function addCacheCallback(callable $cacheCallback): static
+        {
+            $this->cacheCallback[] = $cacheCallback;
+
+            return $this;
+        }
+
+        public function setCachePath(string $cachePath): static
+        {
+            $this->cachePath = rtrim($cachePath, '\/\\') . '/';
+
+            return $this;
+        }
+
+        public function getIsByCache(): bool
+        {
+            return $this->isByCache;
+        }
+
+        public function setMethod(string $method): static
+        {
+            $this->method = $method;
+
+            return $this;
+        }
+
+        public function getMethod(): string
+        {
+            return $this->method;
+        }
+
+        public function setRawHeader(string $rawHeader): static
+        {
+            $headers = Utils::parseHeaders($rawHeader);
+            unset($headers['host']);
+
+            $this->rawHeader = $headers;
+
+            return $this;
+        }
+
+        public function setSuccessCallback($successCallback): static
+        {
+            $this->successCallback = $successCallback;
+
+            return $this;
+        }
+
+        public function setClientErrorCallback($clientErrorCallback): static
+        {
+            $this->clientErrorCallback = $clientErrorCallback;
+
+            return $this;
+        }
+
+        public function setErrorCallback($errorCallback): static
+        {
+            $this->errorCallback = $errorCallback;
+
+            return $this;
+        }
+
+        public function setClient($client): static
+        {
+            $this->client = $client;
+
+            return $this;
+        }
+
+        public function setEnableCache(bool $enableCache): static
+        {
+            $this->enableCache = $enableCache;
+
+            return $this;
+        }
+
+        public function getClient(): Client
+        {
+            return $this->client;
+        }
+
+        public function setUrl(string $url): static
+        {
+            $this->url = $url;
+
+            return $this;
+        }
+
+        public function addUrls(array $urls): static
+        {
+            $this->urls = array_merge($this->urls, $urls);
+
+            return $this;
+        }
+
+        public function setSettings(array $settings): static
+        {
+            $this->settings = $settings;
+
+            return $this;
+        }
+
+        /*-----------------------------------------------------------------------------------*/
+
+        public function sendRequest(): void
+        {
+            if ($this->hasCacheData($this->url))
+            {
+                $this->returnFormCacheData($this->url);
+
+                return;
+            }
+
+            if (count($this->rawHeader))
+            {
+                $this->settings[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
+            }
+
+            $promise = $this->client->requestAsync($this->method, $this->url, $this->settings);
+
+            $onFulfilledCallback = function(ResponseInterface $response) {
+                $contents = (string)$response->getBody();
+
+                $this->onSuccess($contents, $response);
+                $this->writeToCache($contents, $response);
+            };
+
+            $onRejectedCallback = function(RequestException $e) {
+                $contents = $e->getMessage();
+                $response = new Response($e->getCode(), [], $contents);
+
+                $this->onError($e);
+                $this->writeToCache($contents, $response);
+            };
+
+            $promise->then($onFulfilledCallback, $onRejectedCallback);
+
+            try
+            {
+                $promise->wait();
+            }
+            catch (\Exception $e)
+            {
+                $msg = "wait Exception:[{$e->getMessage()}]";
+                $this->logInfo($msg);
+            }
+        }
+
+        public function sendBatchRequest(): void
+        {
+            if (count($this->rawHeader))
+            {
+                $this->settings[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
+            }
+
+            // 使用重试中间件
+            $stack = HandlerStack::create();
+            $stack->push(Middleware::retry(function($retries, RequestInterface $request, $response, $exception) {
+
+                $isRetry = $retries < $this->retryTimes && !is_null($exception);
+                if ($isRetry)
+                {
+                    $msg = implode('', [
+                        '重试次数：' . $retries + 1 . ',',
+                        '地址：' . (string)$request->getUri() . ',',
+                        '错误：' . $exception->getMessage(),
+                    ]);
+                    $this->logInfo($msg);
+                }
+
+                return $isRetry;
+
+            }, function($retries) {
+                // 延迟时间：指数退避，每次延迟时间加倍
+                return pow(2, $retries);
+            }));
+
+            $this->settings['handler'] = $stack;
+
+            $noneCacheUrls = [];
+            foreach ($this->urls as $k => $v)
+            {
+                if ($this->hasCacheData($v))
+                {
+                    $this->returnFormCacheData($v);
+                }
+                else
+                {
+                    $noneCacheUrls[] = $v;
+                }
+            }
+
+            if (!count($noneCacheUrls))
+            {
+                return;
+            }
+
+            $urlsGroup = array_chunk($noneCacheUrls, 100);
+            foreach ($urlsGroup as $k => $urls)
+            {
+                $requests = function() use ($urls) {
+                    foreach ($urls as $k => $uri)
+                    {
+                        yield new Request($this->method, $uri);
+                    }
+                };
+
+                $pool = new Pool($this->client, $requests(), [
+                    'handler'     => $stack,
+                    'options'     => $this->settings,
+                    'concurrency' => $this->concurrency,
+                    'fulfilled'   => function(Response $response, $index) use ($urls) {
+                        $this->url = $urls[$index];
+                        $contents  = (string)$response->getBody();
+
+                        $this->onSuccess($contents, $response);
+                        $this->writeToCache($contents, $response);
+                    },
+                    'rejected'    => function(\Throwable $reason, $index) use ($urls) {
+                        $this->url = $urls[$index];
+                        $contents  = $reason->getMessage();
+
+                        if ($reason instanceof RequestException)
+                        {
+                            // 如果失败，记录失败的原因
+                            $response = new Response($reason->getCode(), [], $contents);
+                            $this->onError($reason);
+                            $this->writeToCache($contents, $response);
+                        }
+                        else
+                        {
+                            // 处理其他异常情况
+                            $this->onError(new RequestException($contents, new \GuzzleHttp\Psr7\Request($this->method, new \GuzzleHttp\Psr7\Uri($this->url))));
+                        }
+                    },
+                ]);
+
+                $promise = $pool->promise();
+
+                try
+                {
+                    $promise->wait();
+                }
+                catch (\Exception $e)
+                {
+                    $msg = "wait Exception:[{$e->getMessage()}]";
+                    $this->logInfo($msg);
+                }
+            }
+        }
+
+        /*-----------------------------------------------------------------------------------*/
+        protected function writeToCache($contents, $response): void
+        {
+            $fileName = static::makeCacheFileNameByUrl($this->url);
+            $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
+
+            if ($this->enableCache && $this->isNeedCache($contents, $response))
+            {
+                $msg = "写入缓存:[{$this->url}]";
+                $this->logInfo($msg);
+
+                static::putCache($filePath, $this->method, $response->getStatusCode(), $this->url, $contents);
+            }
+            else
+            {
+                if (is_file($filePath))
+                {
+                    $msg = "删除缓存:[{$this->url}]";
+                    $this->logInfo($msg);
+
+                    unlink($filePath);
+                }
+            }
+        }
+
+        protected function onError(\Exception $e): void
+        {
+            if (is_callable($this->errorCallback))
+            {
+                $msg = "errorCallback:[{$this->url}]";
+                $this->logInfo($msg);
+
+                call_user_func_array($this->errorCallback, [
+                    $e,
+                    $this,
+                ]);
+            }
+        }
+
+        protected function onSuccess(string $contents, ResponseInterface $response): void
+        {
+            if (is_callable($this->successCallback))
+            {
+                $msg = "successCallback:[{$this->url}]";
+                $this->logInfo($msg);
+
                 call_user_func_array($this->successCallback, [
                     $contents,
                     $this,
                     $response,
                 ]);
             }
-        }, function (RequestException $e) {
-            if (is_callable($this->errorCallback)) {
-                call_user_func_array($this->errorCallback, [
-                    $e,
-                    $this,
-                ]);
-            }
-        });
+        }
 
-        try {
-            $promise->wait();
-        } catch (\Exception $e) {
-            if (is_callable($this->errorCallback)) {
-                call_user_func_array($this->errorCallback, [
-                    $e,
-                    $this,
-                ]);
+        protected function hasCacheData(string $url): bool
+        {
+            $fileName = static::makeCacheFileNameByUrl($url);
+            $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
+
+            $isCache = $this->enableCache && is_file($filePath);
+
+            if ($isCache)
+            {
+                $msg = "走缓存:[{$url}]";
+            }
+            else
+            {
+                $msg = "没有缓存:[{$url}]";
+            }
+
+            $this->logInfo($msg);
+
+            return $isCache;
+        }
+
+        protected function returnFormCacheData(string $url): void
+        {
+            $this->isByCache = true;
+
+            $fileName = static::makeCacheFileNameByUrl($url);
+            $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
+
+            $cacheContents = static::getCache($filePath);
+
+            $contents = $cacheContents['contents'];
+            $code     = $cacheContents['code'];
+            $method   = $cacheContents['method'];
+            //$url      = $cacheContents['url'];
+
+            $this->url = $url;
+            $response  = new Response($code, [], $contents);
+
+            if ($code == 200)
+            {
+                $this->onSuccess($contents, $response);
+            }
+            else
+            {
+                $this->onError(new RequestException($contents, new \GuzzleHttp\Psr7\Request($method, new \GuzzleHttp\Psr7\Uri($url))));
             }
         }
+
+        protected function isNeedCache($contents, $response): bool
+        {
+            $isNeedCache = false;
+            foreach ($this->cacheCallback as $k => $v)
+            {
+                $res = call_user_func_array($v, [
+                    $contents,
+                    $this,
+                    $response,
+                ]);
+
+                if ($res)
+                {
+                    $isNeedCache = true;
+                    break;
+                }
+            }
+
+            return $isNeedCache;
+        }
+
+        protected static function makeCacheFileNameByUrl(string $url): string
+        {
+            $hash = md5($url);
+
+            return implode('', [
+                substr($hash, 0, 2) . DIRECTORY_SEPARATOR,
+                substr($hash, 2, 2) . DIRECTORY_SEPARATOR,
+                substr($hash, 4, 2) . DIRECTORY_SEPARATOR,
+                substr($hash, 6, 2) . DIRECTORY_SEPARATOR,
+                $hash . '.json',
+            ]);
+        }
+
+        protected function makeCacheFileFullPathNameByUrl(string $fileName): string
+        {
+            $filePath = rtrim($this->cachePath, '\/\\') . '/' . $fileName;
+            is_dir(dirname($filePath)) or mkdir(dirname($filePath), 777, true);
+
+            return $filePath;
+        }
+
+        protected static function putCache(string $filename, string $method, int $code, string $url, string $contents): bool|int
+        {
+            $data = [
+                "code"     => $code,
+                "method"   => $method,
+                "url"      => $url,
+                "contents" => base64_encode(gzencode($contents)),
+            ];
+
+            return file_put_contents($filename, json_encode($data, JSON_UNESCAPED_UNICODE));
+        }
+
+        protected static function getCache(string $filename)
+        {
+            $contents = json_decode(file_get_contents($filename), true);
+
+            $contents['contents'] = gzdecode(base64_decode($contents['contents']));
+
+            return $contents;
+        }
     }
-}

@@ -6,7 +6,8 @@
 	"require"              : {
 		"php"                       : ">=8.0",
 		"coco-project/magic-access" : "^1.0",
-		"guzzlehttp/guzzle"         : "^7.0"
+		"guzzlehttp/guzzle"         : "^7.0",
+		"coco-project/logger"       : "^1.0"
 	},
 	"autoload"             : {
 		"psr-4" : {
