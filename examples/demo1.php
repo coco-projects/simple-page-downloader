@@ -62,41 +62,26 @@ AAA;
 
         $ins->setSettings([
             //            'body' => "page={$i}&size=20&jgmc=&kanh=G4&leix=45",
-
             'query' => [
                 'channelid' => '224453',
             ],
-
             "form_params" => $postPrams,
         ]);
 
-        echo '采集列表：- ' . $i;
-        echo PHP_EOL;
-
-        print_r($postPrams);;;
-        echo PHP_EOL;
+        $ins->logInfo('采集列表');
 
         $ins->setUrl($url)
             ->setSuccessCallback(function(string $contents, Downloader $_this, ResponseInterface $response) use ($i) {
-//            $contents = $_ins1::gbkToUtf8($contents);
+//            $contents = $_this::gbkToUtf8($contents);
 
                 $json = json_decode($contents, true);
+                $_this->logInfo('保存：' . '列表结果：- ' . count($json['data']));
 
-                echo '列表结果：- ' . count($json['data']);
-                echo PHP_EOL;
-
-            })->setErrorCallback(function(RequestException $e, Downloader $_ins1) {
-                echo PHP_EOL;
-                echo PHP_EOL;
-
-                echo $e->getMessage();
-                echo PHP_EOL;
-                echo PHP_EOL;
-
+            })->setErrorCallback(function(RequestException $e, Downloader $_this) {
+                $_this->logInfo('出错：' . $e->getMessage());
             })->sendRequest();
 
-        echo '列表-等1秒...';
-        echo PHP_EOL;
-        echo PHP_EOL;
+        $ins->logInfo('列表-等1秒...');
+
         sleep(1);
     }

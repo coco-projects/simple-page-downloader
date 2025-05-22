@@ -36,9 +36,6 @@
 
     $ins->setSettings([
         "proxy" => 'http://192.168.0.111:1080',
-        'query' => [
-            'channelid' => '224453',
-        ],
     ]);
 
     $ins->setSuccessCallback(function(string $contents, Downloader $_this, ResponseInterface $response) {

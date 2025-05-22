@@ -15,6 +15,8 @@
     Downloader::initLogger('download_log', true, true);
 
     $url = 'https://cdn84037269.blazingcdn.net/game/c/2025/04-28/89/620978211267454.jpg';
+    $url = 'https://cdn84037269.blazingcdn.net/game/c/2025/04-28/89/6209782112674541.jpg';
+
     $ins = Downloader::ins();
 
     $ins->setEnableCache(!false);

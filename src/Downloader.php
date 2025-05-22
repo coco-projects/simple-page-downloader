@@ -38,8 +38,8 @@
         public         $successCallback     = null;
         public         $errorCallback       = null;
         public         $clientErrorCallback = null;
+        public         $onDoneCallback      = null;
         public int     $retryTimes          = 5;
-
 
         protected static string $redisHost     = '127.0.0.1';
         protected static string $redisPassword = '';
@@ -170,6 +170,13 @@
             return $this;
         }
 
+        public function setOnDoneCallback($onDoneCallback): static
+        {
+            $this->onDoneCallback = $onDoneCallback;
+
+            return $this;
+        }
+
         public function setClientErrorCallback($clientErrorCallback): static
         {
             $this->clientErrorCallback = $clientErrorCallback;
@@ -228,13 +235,12 @@
 
         public function sendRequest(): void
         {
-            if ($this->hasCacheData($this->url))
-            {
-                $this->returnFormCacheData($this->url);
+            $cacheMiddleware = new CacheMiddleware($this->readCacheFunction(), $this->writeCacheFunction(), $this);
 
-                return;
-            }
+            $stack = HandlerStack::create();
+            $stack->push($cacheMiddleware);
 
+            $this->settings['handler'] = $stack;
             if (count($this->rawHeader))
             {
                 $this->settings[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
@@ -244,17 +250,11 @@
 
             $onFulfilledCallback = function(ResponseInterface $response) {
                 $contents = (string)$response->getBody();
-
-                $this->onSuccess($contents, $response);
-                $this->writeToCache($contents, $response);
+                $this->onSuccess($contents, $response, 1);
             };
 
             $onRejectedCallback = function(RequestException $e) {
-                $contents = $e->getMessage();
-                $response = new Response($e->getCode(), [], $contents);
-
-                $this->onError($e);
-                $this->writeToCache($contents, $response);
+                $this->onError($e, 1);
             };
 
             $promise->then($onFulfilledCallback, $onRejectedCallback);
@@ -265,8 +265,16 @@
             }
             catch (\Exception $e)
             {
-                $msg = "wait Exception:[{$e->getMessage()}]";
-                $this->logInfo($msg);
+//                $msg = "wait Exception:[{$e->getMessage()}]";
+//                $this->logInfo($msg);
+            }
+
+            $this->url = '';
+            if (is_callable($this->onDoneCallback))
+            {
+                call_user_func_array($this->onDoneCallback, [
+                    $this,
+                ]);
             }
         }
 
@@ -277,15 +285,18 @@
                 $this->settings[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
             }
 
-            // 使用重试中间件
+            $cacheMiddleware = new CacheMiddleware($this->readCacheFunction(), $this->writeCacheFunction(), $this);
+
             $stack = HandlerStack::create();
+            $stack->push($cacheMiddleware);
+
             $stack->push(Middleware::retry(function($retries, RequestInterface $request, $response, $exception) {
 
                 $isRetry = $retries < $this->retryTimes && !is_null($exception);
                 if ($isRetry)
                 {
                     $msg = implode('', [
-                        '重试次数：' . $retries + 1 . ',',
+                        '重试：' . $retries + 1 . ',',
                         '地址：' . (string)$request->getUri() . ',',
                         '错误：' . $exception->getMessage(),
                     ]);
@@ -301,29 +312,10 @@
 
             $this->settings['handler'] = $stack;
 
-            $noneCacheUrls = [];
-            foreach ($this->urls as $k => $v)
+            if (count($this->urls))
             {
-                if ($this->hasCacheData($v))
-                {
-                    $this->returnFormCacheData($v);
-                }
-                else
-                {
-                    $noneCacheUrls[] = $v;
-                }
-            }
-
-            if (!count($noneCacheUrls))
-            {
-                return;
-            }
-
-            $urlsGroup = array_chunk($noneCacheUrls, 100);
-            foreach ($urlsGroup as $k => $urls)
-            {
-                $requests = function() use ($urls) {
-                    foreach ($urls as $k => $uri)
+                $requests = function() {
+                    foreach ($this->urls as $k => $uri)
                     {
                         yield new Request($this->method, $uri);
                     }
@@ -333,28 +325,25 @@
                     'handler'     => $stack,
                     'options'     => $this->settings,
                     'concurrency' => $this->concurrency,
-                    'fulfilled'   => function(Response $response, $index) use ($urls) {
-                        $this->url = $urls[$index];
+                    'fulfilled'   => function(Response $response, $index) {
+                        $this->url = $this->urls[$index];
                         $contents  = (string)$response->getBody();
 
-                        $this->onSuccess($contents, $response);
-                        $this->writeToCache($contents, $response);
+                        $this->onSuccess($contents, $response, $index);
                     },
-                    'rejected'    => function(\Throwable $reason, $index) use ($urls) {
-                        $this->url = $urls[$index];
+                    'rejected'    => function(\Throwable $reason, $index) {
+                        $this->url = $this->urls[$index];
                         $contents  = $reason->getMessage();
 
                         if ($reason instanceof RequestException)
                         {
                             // 如果失败，记录失败的原因
-                            $response = new Response($reason->getCode(), [], $contents);
-                            $this->onError($reason);
-                            $this->writeToCache($contents, $response);
+                            $this->onError($reason, $index);
                         }
                         else
                         {
                             // 处理其他异常情况
-                            $this->onError(new RequestException($contents, new \GuzzleHttp\Psr7\Request($this->method, new \GuzzleHttp\Psr7\Uri($this->url))));
+                            $this->onError(new RequestException($contents, new \GuzzleHttp\Psr7\Request($this->method, new \GuzzleHttp\Psr7\Uri($this->url))), $index);
                         }
                     },
                 ]);
@@ -371,34 +360,19 @@
                     $this->logInfo($msg);
                 }
             }
+
+            $this->urls = [];
+            if (is_callable($this->onDoneCallback))
+            {
+                call_user_func_array($this->onDoneCallback, [
+                    $this,
+                ]);
+            }
         }
 
         /*-----------------------------------------------------------------------------------*/
-        protected function writeToCache($contents, $response): void
-        {
-            $fileName = static::makeCacheFileNameByUrl($this->url);
-            $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
 
-            if ($this->enableCache && $this->isNeedCache($contents, $response))
-            {
-                $msg = "写入缓存:[{$this->url}]";
-                $this->logInfo($msg);
-
-                static::putCache($filePath, $this->method, $response->getStatusCode(), $this->url, $contents);
-            }
-            else
-            {
-                if (is_file($filePath))
-                {
-                    $msg = "删除缓存:[{$this->url}]";
-                    $this->logInfo($msg);
-
-                    unlink($filePath);
-                }
-            }
-        }
-
-        protected function onError(\Exception $e): void
+        protected function onError(\Exception $e, int $index): void
         {
             if (is_callable($this->errorCallback))
             {
@@ -408,11 +382,12 @@
                 call_user_func_array($this->errorCallback, [
                     $e,
                     $this,
+                    $index,
                 ]);
             }
         }
 
-        protected function onSuccess(string $contents, ResponseInterface $response): void
+        protected function onSuccess(string $contents, ResponseInterface $response, int $index): void
         {
             if (is_callable($this->successCallback))
             {
@@ -423,55 +398,8 @@
                     $contents,
                     $this,
                     $response,
+                    $index,
                 ]);
-            }
-        }
-
-        protected function hasCacheData(string $url): bool
-        {
-            $fileName = static::makeCacheFileNameByUrl($url);
-            $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
-
-            $isCache = $this->enableCache && is_file($filePath);
-
-            if ($isCache)
-            {
-                $msg = "走缓存:[{$url}]";
-            }
-            else
-            {
-                $msg = "没有缓存:[{$url}]";
-            }
-
-            $this->logInfo($msg);
-
-            return $isCache;
-        }
-
-        protected function returnFormCacheData(string $url): void
-        {
-            $this->isByCache = true;
-
-            $fileName = static::makeCacheFileNameByUrl($url);
-            $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
-
-            $cacheContents = static::getCache($filePath);
-
-            $contents = $cacheContents['contents'];
-            $code     = $cacheContents['code'];
-            $method   = $cacheContents['method'];
-            //$url      = $cacheContents['url'];
-
-            $this->url = $url;
-            $response  = new Response($code, [], $contents);
-
-            if ($code == 200)
-            {
-                $this->onSuccess($contents, $response);
-            }
-            else
-            {
-                $this->onError(new RequestException($contents, new \GuzzleHttp\Psr7\Request($method, new \GuzzleHttp\Psr7\Uri($url))));
             }
         }
 
@@ -515,6 +443,54 @@
             is_dir(dirname($filePath)) or mkdir(dirname($filePath), 777, true);
 
             return $filePath;
+        }
+
+        protected function readCacheFunction(): \Closure
+        {
+            return function(string $url) {
+
+                $fileName = static::makeCacheFileNameByUrl($url);
+                $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
+
+                if (is_file($filePath))
+                {
+                    if ($this->enableCache)
+                    {
+                        $msg = "读缓存:[{$url}]";
+                        $this->logInfo($msg);
+
+                        return static::getCache($filePath);
+                    }
+                    else
+                    {
+                        @unlink($filePath);
+                    }
+                }
+
+                return null;
+            };
+
+        }
+
+        protected function writeCacheFunction(): \Closure
+        {
+            return function(string $url, $response) {
+
+                $contents = (string)$response->getBody();
+
+                $code = $response->getStatusCode();
+
+                $fileName = static::makeCacheFileNameByUrl($url);
+                $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
+
+                if ($this->enableCache && $this->isNeedCache($contents, $response))
+                {
+                    $msg = "写入缓存:[{$code}][{$url}]";
+                    $this->logInfo($msg);
+
+                    static::putCache($filePath, $this->method, $code, $url, $contents);
+                }
+            };
         }
 
         protected static function putCache(string $filename, string $method, int $code, string $url, string $contents): bool|int
