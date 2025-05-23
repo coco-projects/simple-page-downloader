@@ -385,7 +385,7 @@
                 substr($hash, 2, 2) . DIRECTORY_SEPARATOR,
                 substr($hash, 4, 2) . DIRECTORY_SEPARATOR,
                 substr($hash, 6, 2) . DIRECTORY_SEPARATOR,
-                $hash . '.json',
+                $hash . '.txt',
             ]);
         }
 
@@ -448,19 +448,19 @@
 
         protected static function putCache(string $filename, string $method, int $code, string $url, string $contents): bool|int
         {
-            $data = [
+            $data = gzencode(json_encode([
                 "code"     => $code,
                 "method"   => $method,
                 "url"      => $url,
                 "contents" => base64_encode(gzencode($contents)),
-            ];
+            ], JSON_UNESCAPED_UNICODE));
 
-            return file_put_contents($filename, json_encode($data, JSON_UNESCAPED_UNICODE));
+            return file_put_contents($filename, $data);
         }
 
         protected static function getCache(string $filename)
         {
-            $contents = json_decode(file_get_contents($filename), true);
+            $contents = json_decode(gzdecode(file_get_contents($filename)), true);
 
             $contents['contents'] = gzdecode(base64_decode($contents['contents']));
 
