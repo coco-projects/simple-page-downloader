@@ -247,8 +247,7 @@
                 return $isRetry;
 
             }, function($retries) {
-                // 延迟时间：指数退避，每次延迟时间加倍
-                return pow(2, $retries);
+                return 1;
             }));
 
             $this->options['handler'] = $stack;
