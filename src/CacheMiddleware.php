@@ -28,6 +28,8 @@
             return function(RequestInterface $request, array $options) use ($handler) {
                 // 获取请求的URL
                 $url = (string)$request->getUri();
+                $this->downloader->logInfo('请求：' . $url);
+                $this->downloader->timer->start();
 
                 // 通过cacheFunction读取缓存
                 $cachedResponse = ($this->readCacheFunction)($request);
@@ -41,18 +43,22 @@
                     $method   = $cacheContents['method'];
                     $url      = $cacheContents['url'];
 
+                    $this->downloader->logInfo('请求耗时：' . $this->downloader->timer->totalTime() . " S [$url]");
+
                     return Create::promiseFor(new Response($code, [], $contents));
                 }
 
-                $onFulfilledCallback = function(ResponseInterface $response) use ($request) {
+                $onFulfilledCallback = function(ResponseInterface $response) use ($request, $url) {
 
                     // 这里可以设置缓存逻辑，比如存储响应以便下次使用
                     ($this->writeCacheFunction)($request, $response);
 
+                    $this->downloader->logInfo('请求耗时：' . $this->downloader->timer->totalTime() . " S [$url]");
+
                     return $response;
                 };
 
-                $onRejectedCallback = function($reason) use ($request) {
+                $onRejectedCallback = function($reason) use ($request, $url) {
                     $contents = $reason->getMessage();
 
                     if ($reason instanceof RequestException)
@@ -64,13 +70,15 @@
                         ($this->writeCacheFunction)($request, $response);
                     }
 
+                    $this->downloader->logInfo('请求耗时：' . $this->downloader->timer->totalTime() . " S [$url]");
+
                     return Create::rejectionFor($reason);
                 };
 
-                $this->downloader->logInfo('请求：' . $url);
-
                 // 缓存不存在，继续发送请求
-                return $handler($request, $options)->then($onFulfilledCallback, $onRejectedCallback);
+                $res = $handler($request, $options)->then($onFulfilledCallback, $onRejectedCallback);
+
+                return $res;
             };
         }
     }

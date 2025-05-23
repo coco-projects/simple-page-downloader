@@ -6,6 +6,7 @@
 
     use Coco\logger\Logger;
     use Coco\magicAccess\MagicMethod;
+    use Coco\timer\Timer;
     use GuzzleHttp\Client;
     use GuzzleHttp\Exception\RequestException;
     use GuzzleHttp\HandlerStack;
@@ -26,6 +27,7 @@
         public static array $clientConfig = [];
 
         public ?Client $client              = null;
+        public ?Timer  $timer               = null;
         public int     $concurrency         = 5;
         public string  $url                 = '';
         public array   $urls                = [];
@@ -80,6 +82,7 @@
         protected function __construct()
         {
             $this->client = new Client(static::$clientConfig);
+            $this->timer  = new Timer();
 
             $this->setStandardLogger(static::$logNamespace);
 
@@ -226,9 +229,9 @@
                 $this->options[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
             }
 
-            $cacheMiddleware = new CacheMiddleware($this->readCacheFunction(), $this->writeCacheFunction(), $this);
-
             $stack = HandlerStack::create();
+
+            $cacheMiddleware = new CacheMiddleware($this->readCacheFunction(), $this->writeCacheFunction(), $this);
             $stack->push($cacheMiddleware);
 
             $stack->push(Middleware::retry(function($retries, RequestInterface $request, ?ResponseInterface $response, $exception) {
