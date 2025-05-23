@@ -5,6 +5,7 @@
     namespace Coco\simplePageDownloader;
 
     use GuzzleHttp\Exception\RequestException;
+    use GuzzleHttp\Promise\Create;
     use GuzzleHttp\Psr7\Response;
     use Psr\Http\Message\RequestInterface;
     use Psr\Http\Message\ResponseInterface;
@@ -29,7 +30,7 @@
                 $url = (string)$request->getUri();
 
                 // 通过cacheFunction读取缓存
-                $cachedResponse = ($this->readCacheFunction)($url);
+                $cachedResponse = ($this->readCacheFunction)($request);
 
                 if (is_array($cachedResponse))
                 {
@@ -40,18 +41,18 @@
                     $method   = $cacheContents['method'];
                     $url      = $cacheContents['url'];
 
-                    return \GuzzleHttp\Promise\Create::promiseFor(new Response($code, [], $contents));
+                    return Create::promiseFor(new Response($code, [], $contents));
                 }
 
-                $onFulfilledCallback = function(ResponseInterface $response) use ($url) {
+                $onFulfilledCallback = function(ResponseInterface $response) use ($request) {
 
                     // 这里可以设置缓存逻辑，比如存储响应以便下次使用
-                    ($this->writeCacheFunction)($url, $response);
+                    ($this->writeCacheFunction)($request, $response);
 
                     return $response;
                 };
 
-                $onRejectedCallback = function($reason) use ($url) {
+                $onRejectedCallback = function($reason) use ($request) {
                     $contents = $reason->getMessage();
 
                     if ($reason instanceof RequestException)
@@ -60,10 +61,10 @@
                         $response = new Response($reason->getCode(), [], $contents);
 
                         // 这里可以设置缓存逻辑，比如存储响应以便下次使用
-                        ($this->writeCacheFunction)($url, $response);
+                        ($this->writeCacheFunction)($request, $response);
                     }
 
-                    return \GuzzleHttp\Promise\Create::rejectionFor($reason);
+                    return Create::rejectionFor($reason);
                 };
 
                 $this->downloader->logInfo('请求：' . $url);

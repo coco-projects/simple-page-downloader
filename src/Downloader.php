@@ -13,10 +13,11 @@
     use GuzzleHttp\Psr7\Response;
     use Psr\Http\Message\RequestInterface;
     use Psr\Http\Message\ResponseInterface;
-
     use GuzzleHttp\Pool;
-    use GuzzleHttp\Psr7\Request;
 
+    /**
+     * @link https://docs.guzzlephp.org/en/stable/quickstart.html
+     */
     class Downloader
     {
         use MagicMethod;
@@ -28,7 +29,8 @@
         public int     $concurrency         = 5;
         public string  $url                 = '';
         public array   $urls                = [];
-        public array   $settings            = [];
+        public array   $batchRequests       = [];
+        public array   $options             = [];
         public array   $rawHeader           = [];
         public array   $cacheCallback       = [];
         public bool    $enableCache         = false;
@@ -94,10 +96,11 @@
 
         public function baseCacheStrategy(): static
         {
-            $this->addCacheCallback(function(string $contents, Downloader $_this, ResponseInterface $response) {
+            $this->addCacheCallback(function(Downloader $_this, RequestInterface $request, ResponseInterface $response) {
 
+                $contents   = (string)$response->getBody();
                 $statusCode = $response->getStatusCode();
-                $method     = $_this->getMethod();
+                $method     = $request->getMethod();
 
                 return (strtolower($method) == 'get') && in_array($statusCode, [
                         200,
@@ -139,18 +142,6 @@
         public function getIsByCache(): bool
         {
             return $this->isByCache;
-        }
-
-        public function setMethod(string $method): static
-        {
-            $this->method = $method;
-
-            return $this;
-        }
-
-        public function getMethod(): string
-        {
-            return $this->method;
         }
 
         public function setRawHeader(string $rawHeader): static
@@ -210,79 +201,29 @@
             return $this->client;
         }
 
-        public function setUrl(string $url): static
+        public function addBatchRequest(string $url, $method = 'get', array $options = []): static
         {
-            $this->url = $url;
+            $this->batchRequests[] = [
+                "url"     => $url,
+                "method"  => $method,
+                "options" => $options,
+            ];
 
             return $this;
         }
 
-        public function addUrls(array $urls): static
+        public function getRequestInfoByIndex(int $index): ?array
         {
-            $this->urls = array_merge($this->urls, $urls);
-
-            return $this;
-        }
-
-        public function setSettings(array $settings): static
-        {
-            $this->settings = $settings;
-
-            return $this;
+            return $this->batchRequests[$index] ?? null;
         }
 
         /*-----------------------------------------------------------------------------------*/
 
-        public function sendRequest(): void
-        {
-            $cacheMiddleware = new CacheMiddleware($this->readCacheFunction(), $this->writeCacheFunction(), $this);
-
-            $stack = HandlerStack::create();
-            $stack->push($cacheMiddleware);
-
-            $this->settings['handler'] = $stack;
-            if (count($this->rawHeader))
-            {
-                $this->settings[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
-            }
-
-            $promise = $this->client->requestAsync($this->method, $this->url, $this->settings);
-
-            $onFulfilledCallback = function(ResponseInterface $response) {
-                $contents = (string)$response->getBody();
-                $this->onSuccess($contents, $response, 1);
-            };
-
-            $onRejectedCallback = function(RequestException $e) {
-                $this->onError($e, 1);
-            };
-
-            $promise->then($onFulfilledCallback, $onRejectedCallback);
-
-            try
-            {
-                $promise->wait();
-            }
-            catch (\Exception $e)
-            {
-//                $msg = "wait Exception:[{$e->getMessage()}]";
-//                $this->logInfo($msg);
-            }
-
-            $this->url = '';
-            if (is_callable($this->onDoneCallback))
-            {
-                call_user_func_array($this->onDoneCallback, [
-                    $this,
-                ]);
-            }
-        }
-
-        public function sendBatchRequest(): void
+        public function send(): void
         {
             if (count($this->rawHeader))
             {
-                $this->settings[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
+                $this->options[\GuzzleHttp\RequestOptions::HEADERS] = $this->rawHeader;
             }
 
             $cacheMiddleware = new CacheMiddleware($this->readCacheFunction(), $this->writeCacheFunction(), $this);
@@ -290,7 +231,7 @@
             $stack = HandlerStack::create();
             $stack->push($cacheMiddleware);
 
-            $stack->push(Middleware::retry(function($retries, RequestInterface $request, $response, $exception) {
+            $stack->push(Middleware::retry(function($retries, RequestInterface $request, ?ResponseInterface $response, $exception) {
 
                 $isRetry = $retries < $this->retryTimes && !is_null($exception);
                 if ($isRetry)
@@ -310,30 +251,43 @@
                 return pow(2, $retries);
             }));
 
-            $this->settings['handler'] = $stack;
+            $this->options['handler'] = $stack;
 
-            if (count($this->urls))
+            if (count($this->batchRequests))
             {
                 $requests = function() {
-                    foreach ($this->urls as $k => $uri)
+                    foreach ($this->batchRequests as $k => $requestInfo)
                     {
-                        yield new Request($this->method, $uri);
+                        yield function() use ($requestInfo) {
+                            return $this->client->requestAsync($requestInfo['method'], $requestInfo['url'], static::recursive_array_merge($this->options, $requestInfo['options']));
+                        };
                     }
                 };
 
                 $pool = new Pool($this->client, $requests(), [
-                    'handler'     => $stack,
-                    'options'     => $this->settings,
+                    'options'     => $this->options,
                     'concurrency' => $this->concurrency,
                     'fulfilled'   => function(Response $response, $index) {
-                        $this->url = $this->urls[$index];
-                        $contents  = (string)$response->getBody();
+
+                        $requestInfo = $this->batchRequests[$index];
+                        $contents    = (string)$response->getBody();
+
+                        $msg = "successCallback:[{$requestInfo['url']}]";
+                        $this->logInfo($msg);
 
                         $this->onSuccess($contents, $response, $index);
                     },
                     'rejected'    => function(\Throwable $reason, $index) {
-                        $this->url = $this->urls[$index];
-                        $contents  = $reason->getMessage();
+
+                        $requestInfo = $this->batchRequests[$index];
+                        $contents    = implode('', [
+                            "{$reason->getFile()}",
+                            "[{$reason->getLine()}],",
+                            $reason->getMessage(),
+                        ]);
+
+                        $msg = "errorCallback:[{$requestInfo['url']}]";
+                        $this->logInfo($msg);
 
                         if ($reason instanceof RequestException)
                         {
@@ -343,7 +297,7 @@
                         else
                         {
                             // 处理其他异常情况
-                            $this->onError(new RequestException($contents, new \GuzzleHttp\Psr7\Request($this->method, new \GuzzleHttp\Psr7\Uri($this->url))), $index);
+                            $this->onError(new RequestException($contents, new \GuzzleHttp\Psr7\Request($requestInfo['method'], new \GuzzleHttp\Psr7\Uri($requestInfo['url']))), $index);
                         }
                     },
                 ]);
@@ -356,14 +310,16 @@
                 }
                 catch (\Exception $e)
                 {
-                    $msg = "wait Exception:[{$e->getMessage()}]";
-                    $this->logInfo($msg);
+//                    $msg = "wait Exception:[{$e->getMessage()}]";
+//                    $this->logInfo($msg);
                 }
             }
 
-            $this->urls = [];
+            $this->batchRequests = [];
             if (is_callable($this->onDoneCallback))
             {
+                $msg = "onDoneCallback";
+                $this->logInfo($msg);
                 call_user_func_array($this->onDoneCallback, [
                     $this,
                 ]);
@@ -376,9 +332,6 @@
         {
             if (is_callable($this->errorCallback))
             {
-                $msg = "errorCallback:[{$this->url}]";
-                $this->logInfo($msg);
-
                 call_user_func_array($this->errorCallback, [
                     $e,
                     $this,
@@ -391,9 +344,6 @@
         {
             if (is_callable($this->successCallback))
             {
-                $msg = "successCallback:[{$this->url}]";
-                $this->logInfo($msg);
-
                 call_user_func_array($this->successCallback, [
                     $contents,
                     $this,
@@ -403,14 +353,14 @@
             }
         }
 
-        protected function isNeedCache($contents, $response): bool
+        protected function isNeedCache($request, $response): bool
         {
             $isNeedCache = false;
             foreach ($this->cacheCallback as $k => $v)
             {
                 $res = call_user_func_array($v, [
-                    $contents,
                     $this,
+                    $request,
                     $response,
                 ]);
 
@@ -447,7 +397,8 @@
 
         protected function readCacheFunction(): \Closure
         {
-            return function(string $url) {
+            return function(RequestInterface $request) {
+                $url = (string)$request->getUri();
 
                 $fileName = static::makeCacheFileNameByUrl($url);
                 $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
@@ -469,12 +420,12 @@
 
                 return null;
             };
-
         }
 
         protected function writeCacheFunction(): \Closure
         {
-            return function(string $url, $response) {
+            return function(RequestInterface $request, ResponseInterface $response) {
+                $url = (string)$request->getUri();
 
                 $contents = (string)$response->getBody();
 
@@ -483,12 +434,12 @@
                 $fileName = static::makeCacheFileNameByUrl($url);
                 $filePath = $this->makeCacheFileFullPathNameByUrl($fileName);
 
-                if ($this->enableCache && $this->isNeedCache($contents, $response))
+                if ($this->enableCache && $this->isNeedCache($request, $response))
                 {
                     $msg = "写入缓存:[{$code}][{$url}]";
                     $this->logInfo($msg);
 
-                    static::putCache($filePath, $this->method, $code, $url, $contents);
+                    static::putCache($filePath, $request->getMethod(), $code, $url, $contents);
                 }
             };
         }
@@ -513,4 +464,24 @@
 
             return $contents;
         }
+
+        protected static function recursive_array_merge($array1, $array2)
+        {
+            foreach ($array2 as $key => $value)
+            {
+                if (is_array($value) && isset($array1[$key]) && is_array($array1[$key]))
+                {
+                    // 如果值是数组，并且两个数组都包含这个键，递归合并
+                    $array1[$key] = static::recursive_array_merge($array1[$key], $value);
+                }
+                else
+                {
+                    // 否则直接覆盖
+                    $array1[$key] = $value;
+                }
+            }
+
+            return $array1;
+        }
+
     }

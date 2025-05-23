@@ -31,15 +31,19 @@
     $ins->setEnableCache(!false);
     $ins->setCachePath('../downloadCache');
     $ins->baseCacheStrategy();
-    $ins->setMethod('get');
-    $ins->setConcurrency(5);
+    $ins->setConcurrency(3);
 
-    $ins->setSettings([
-        "proxy" => 'http://192.168.0.111:1080',
-    ]);
+    foreach ($urls as $k => $url)
+    {
+        $ins->addBatchRequest($url, 'get', [
+            "proxy" => 'http://192.168.0.111:1080',
+        ]);
+    }
 
-    $ins->setSuccessCallback(function(string $contents, Downloader $_this, ResponseInterface $response) {
-        $fileName = '../testData/' . md5($_this->url) . '.jpg';
+    $ins->setSuccessCallback(function(string $contents, Downloader $_this, ResponseInterface $response, $index) {
+        $requestInfo = $_this->getRequestInfoByIndex($index);
+
+        $fileName = '../testData/' . md5($requestInfo['url']) . '.jpg';
 
         $_this->logInfo('保存：' . $fileName);
 
@@ -47,9 +51,11 @@
         file_put_contents($fileName, $contents);
     });
 
-    $ins->setErrorCallback(function(RequestException $e, Downloader $_ins1) {
-        $_ins1->logInfo('出错：' . $e->getMessage());
+    $ins->setErrorCallback(function(RequestException $e, Downloader $_this, $index) {
+        $_this->logInfo('出错：' . $e->getMessage());
     });
 
-    $ins->addUrls($urls);
-    $ins->sendBatchRequest();
+    $ins->setOnDoneCallback(function(Downloader $_this) {
+        $_this->logInfo('done');
+    });
+    $ins->send();

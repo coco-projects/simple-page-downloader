@@ -42,13 +42,13 @@ AAA;
     $ins            = Downloader::ins();
     $ins->savePath  = './nppa/';
     $ins->headerStr = $headerStr;
-    $ins->initLogger('ttt', true, true);
+    $ins->initLogger('nppa', true, true);
 
     $ins->setEnableCache(true);
     $ins->setCachePath('../downloadCache');
     $ins->baseCacheStrategy();
-    $ins->setMethod('post');
     $ins->setRawHeader($ins->headerStr);
+    $ins->logInfo('采集列表');
 
     for ($i = 1; $i <= 7; $i++)
     {
@@ -59,29 +59,30 @@ AAA;
             "kanh" => "G4",
             "leix" => "45",
         ];
+        $ins->logInfo('列表-' . $i);
 
-        $ins->setSettings([
+        $ins->addBatchRequest($url, 'post', [
             //            'body' => "page={$i}&size=20&jgmc=&kanh=G4&leix=45",
-            'query' => [
+            'query'       => [
                 'channelid' => '224453',
             ],
             "form_params" => $postPrams,
         ]);
 
-        $ins->logInfo('采集列表');
+        $ins->setOnDoneCallback(function(Downloader $_this) {
+            $_this->logInfo('done');
+        });
 
-        $ins->setUrl($url)
-            ->setSuccessCallback(function(string $contents, Downloader $_this, ResponseInterface $response) use ($i) {
-//            $contents = $_this::gbkToUtf8($contents);
+        $ins->setSuccessCallback(function(string $contents, Downloader $_this, ResponseInterface $response) use ($i) {
+            $json = json_decode($contents, true);
+            $_this->logInfo('保存：' . '列表结果：- ' . count($json['data']));
 
-                $json = json_decode($contents, true);
-                $_this->logInfo('保存：' . '列表结果：- ' . count($json['data']));
+        })->setErrorCallback(function(RequestException $e, Downloader $_this) {
+            $_this->logInfo('出错：' . $e->getMessage());
 
-            })->setErrorCallback(function(RequestException $e, Downloader $_this) {
-                $_this->logInfo('出错：' . $e->getMessage());
-            })->sendRequest();
+        })->send();
 
-        $ins->logInfo('列表-等1秒...');
+        $ins->logInfo('等1秒...');
 
         sleep(1);
     }
