@@ -36,7 +36,7 @@
     foreach ($urls as $k => $url)
     {
         $ins->addBatchRequest($url, 'get', [
-            "proxy" => 'http://192.168.0.111:1080',
+//            "proxy" => 'http://192.168.0.111:1080',
         ]);
     }
 

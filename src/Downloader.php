@@ -392,7 +392,6 @@
         protected function makeCacheFileFullPathNameByUrl(string $fileName): string
         {
             $filePath = rtrim($this->cachePath, '\/\\') . '/' . $fileName;
-            is_dir(dirname($filePath)) or mkdir(dirname($filePath), 777, true);
 
             return $filePath;
         }
@@ -454,6 +453,8 @@
                 "url"      => $url,
                 "contents" => base64_encode(gzencode($contents)),
             ], JSON_UNESCAPED_UNICODE));
+
+            is_dir(dirname($filename)) or mkdir(dirname($filename), 777, true);
 
             return file_put_contents($filename, $data);
         }
